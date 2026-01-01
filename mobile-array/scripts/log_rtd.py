@@ -56,7 +56,7 @@ serial = get_pi_serial()
 sub_dir = serial_to_dir.get(serial, "UNKNOWN_PI")  # default to something neutral
 
 # === Create directory if it doesn't exist ===
-output_dir = f"/home/meganmason/Documents/projects/cold-content/snowtemps_raspi/logger_files/{sub_dir}"
+output_dir = f"/home/meganmason/Documents/projects/cold-content/snowtemps_raspi/mobile-array/logger_files/{sub_dir}"
 os.makedirs(output_dir, exist_ok=True)
 
 # === Configure logging ===
