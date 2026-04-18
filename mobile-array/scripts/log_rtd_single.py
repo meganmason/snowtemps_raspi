@@ -2,24 +2,16 @@ import time
 import json
 import logging
 import datetime
-import pandas as pd
 import csv
 import librtd
 from pathlib import Path
-
-'''
-Note - this is name '_single' but still has some serial 
-fetching components. It also doesn't sort into OPIE I,II,III 
-directories any more, so if you start here and want that feature
-you'll need updates or everything will overwrite
-'''
 
 # ------------------------------------------------------
 # File paths
 # ------------------------------------------------------
 data_file = Path(
     "/home/meganmason/Documents/projects/cold-content/"
-    "snowtemps_raspi/mobile-array/logger_files/instrument_log.csv"
+    "snowtemps_raspi/mobile-array/logger_files/instrument_data.txt"
 )
 log_file = Path(
     "/home/meganmason/Documents/projects/cold-content/"
@@ -37,7 +29,7 @@ logging.basicConfig(
 logging.info("Instrument restarted")
 
 # ------------------------------------------------------
-# Offsets (Script A style)
+# Offsets
 # ------------------------------------------------------
 with open("sensor_offsets.json") as f:
     offsets_all = json.load(f)
@@ -63,34 +55,38 @@ if not data_file.exists():
 # ------------------------------------------------------
 # Sampling settings
 # ------------------------------------------------------
-SAMPLE_INTERVAL = 30        # seconds
-SAMPLES_PER_PERIOD = 10     # 10 × 30 sec = 5 min
+SAMPLE_INTERVAL = 30    # seconds
+SAMPLES_PER_PERIOD = 10 #10 × 30 sec = 5 min
 CHANNELS = range(1, 9)
 
 # ------------------------------------------------------
-# Align to next even 5-minute boundary (LOCAL TIME)
+# Wait for first even 5-min boundary before starting
 # ------------------------------------------------------
 now = datetime.datetime.now()
-prev_minute = now.minute - (now.minute % 5)
-aligned = now.replace(minute=prev_minute, second=0, microsecond=0)
-aligned += datetime.timedelta(minutes=5)
+next_boundary = now.replace(second=0, microsecond=0)
+next_boundary -= datetime.timedelta(minutes=now.minute % 5)
+next_boundary += datetime.timedelta(minutes=5)
 
-# logging.info(f"Next 5-min average scheduled for {aligned:%Y-%m-%d %H:%M:%S}")
+wait_seconds = (next_boundary - datetime.datetime.now()).total_seconds()
+logging.info(f"Waiting {wait_seconds:.0f}s until {next_boundary:%H:%M} to begin sampling")
+time.sleep(wait_seconds)
 
 # ======================================================
-# MAIN LOOP — deterministic 5-min bins
+# MAIN LOOP
 # ======================================================
 while True:
 
+    # Timestamp for this 5-min window
+    timestamp = datetime.datetime.now().replace(second=0, microsecond=0)
+
     # --------------------------------------------------
-    # Fresh accumulator for this 5-min window
+    # Collect 10 samples, 30 seconds apart
     # --------------------------------------------------
     data_accum = {ch: [] for ch in CHANNELS}
 
-    # --------------------------------------------------
-    # Collect 10 samples (30 sec apart)
-    # --------------------------------------------------
-    for _ in range(SAMPLES_PER_PERIOD):
+    for i in range(SAMPLES_PER_PERIOD):
+        if i > 0:  # skip sleep on first sample
+            time.sleep(SAMPLE_INTERVAL)
         for ch in CHANNELS:
             try:
                 temp = librtd.get(0, ch)
@@ -103,17 +99,13 @@ while True:
             corr_temp = temp - offset_dict.get(f"ch_{ch}", 0)
             data_accum[ch].append((temp, resi, corr_temp))
 
-        time.sleep(SAMPLE_INTERVAL)
-
     # --------------------------------------------------
     # Write 5-min averages
     # --------------------------------------------------
     with data_file.open("a", newline="") as f:
         writer = csv.writer(f)
-
         for ch in CHANNELS:
             samples = data_accum[ch]
-
             if samples:
                 avg_temp = sum(s[0] for s in samples) / len(samples)
                 avg_resi = sum(s[1] for s in samples) / len(samples)
@@ -122,23 +114,23 @@ while True:
                 avg_temp = avg_resi = avg_corr = float("nan")
 
             writer.writerow([
-                aligned,
+                timestamp,
                 ch,
                 round(avg_temp, 1),
                 round(avg_resi, 0),
                 round(avg_corr, 1),
             ])
 
-    logging.info(f"Wrote 5-min averaged data at {aligned:%Y-%m-%d %H:%M:%S}")
+    logging.info(f"Wrote 5-min averaged data at {timestamp:%Y-%m-%d %H:%M:%S}")
 
     # --------------------------------------------------
-    # Schedule next 5-min boundary
+    # Re-anchor to next 5-min boundary from wall clock
     # --------------------------------------------------
-    aligned += datetime.timedelta(minutes=5)
-    # logging.info(f"Next 5-min average scheduled for {aligned:%Y-%m-%d %H:%M:%S}")
-
-    # Sleep until the next boundary
     now = datetime.datetime.now()
-    sleep_time = (aligned - now).total_seconds()
+    next_boundary = now.replace(second=0, microsecond=0)
+    next_boundary -= datetime.timedelta(minutes=now.minute % 5)
+    next_boundary += datetime.timedelta(minutes=5)
+
+    sleep_time = (next_boundary - datetime.datetime.now()).total_seconds()
     if sleep_time > 0:
         time.sleep(sleep_time)
